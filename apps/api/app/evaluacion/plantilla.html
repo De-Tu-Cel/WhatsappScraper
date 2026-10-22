@@ -180,6 +180,8 @@ h2{font-size:15.5px;font-weight:900;letter-spacing:-.01em;line-height:1.2}
 .bien-items{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
 .item{display:flex;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;cursor:pointer;align-items:flex-start;border-radius:9px;padding:4px 6px 4px 4px;transition:background .2s,border-color .2s}
 .item:hover{background:var(--papel)}
+.item.fijo{cursor:default}
+.item.fijo:hover{background:none}
 .item[aria-pressed="true"]{background:var(--papel);border-color:currentColor}
 .bien .item{color:var(--verdetx)}
 .oport .item{color:var(--ambtx)}
@@ -687,14 +689,26 @@ window.EVALUACION = window.EVALUACION || /*__CONFIG__*/null;
 
   /* ---------- hallazgos: lo que funciona y oportunidades ---------- */
   txt('tit-bien', T.loQueFunciona); txt('tit-oport', T.areasOportunidad);
+  // Solo es botón el hallazgo que tiene su mensaje marcado en la conversación: tocar uno que no lo
+  // tiene no resaltaría nada (pasa en conversaciones muy cortas).
+  var CON_MENSAJE = {};
+  C.conversacion.real.forEach(function(m){
+    var pin = Array.isArray(m) ? m[m.length - 1] : m.pin;
+    if (pin) CON_MENSAJE[pin] = true;
+  });
+  function item(clave, interior){
+    return CON_MENSAJE[clave]
+      ? '<button class="item" type="button" data-ir="' + clave + '" aria-pressed="false">' + interior + '</button>'
+      : '<div class="item fijo">' + interior + '</div>';
+  }
   $('fortalezas').innerHTML = C.fortalezas.map(function(f, k){
-    return '<button class="item" type="button" data-ir="v' + (k+1) + '" aria-pressed="false"><span class="num v">' + CHECK + '</span><span><b>' + esc(f.titulo) + '</b><p>' + esc(f.texto) + '</p></span></button>';
+    return item('v' + (k+1), '<span class="num v">' + CHECK + '</span><span><b>' + esc(f.titulo) + '</b><p>' + esc(f.texto) + '</p></span>');
   }).join('');
   $('oportunidades').insertAdjacentHTML('beforeend', C.oportunidades.map(function(o, k){
-    return '<button class="item" type="button" data-ir="' + (k+1) + '" aria-pressed="false"><span class="num">' + (k+1) + '</span><span class="op-txt">' +
+    return item(String(k+1), '<span class="num">' + (k+1) + '</span><span class="op-txt">' +
       '<span class="op-cab"><b>' + esc(o.titulo) + '</b>' + (o.dato ? '<span class="dato">' + esc(o.dato) + '</span>' : '') + '</span>' +
       '<span class="fila"><span>' + esc(T.loQueVimos) + '</span><span>' + esc(o.vimos) + '</span></span>' +
-      '<span class="fila op"><span>' + esc(T.oportunidad) + '</span><span>' + esc(o.oportunidad) + '</span></span></span></button>';
+      '<span class="fila op"><span>' + esc(T.oportunidad) + '</span><span>' + esc(o.oportunidad) + '</span></span></span>');
   }).join(''));
 
   /* ---------- ventajas ---------- */
@@ -834,12 +848,15 @@ window.EVALUACION = window.EVALUACION || /*__CONFIG__*/null;
     function bajar(){ el.scrollTop = el.scrollHeight; }
     function paso(){
       if (i >= guion.length) return;
-      var x = guion[i++];
+      var x = guion[i];
       if (x[0] === 'i'){
+        // El mensaje cuenta como mostrado hasta que aparece: si alguien toca un hallazgo mientras
+        // «escribe», completar() lo agrega en vez de saltárselo.
         var e = document.createElement('div'); e.className = 'escribe'; e.innerHTML = '<i></i><i></i><i></i>';
         el.appendChild(e); bajar();
-        t = setTimeout(function(){ e.remove(); el.appendChild(nodo(x, true)); bajar(); t = setTimeout(paso, 480); }, 560);
+        t = setTimeout(function(){ e.remove(); i++; el.appendChild(nodo(x, true)); bajar(); t = setTimeout(paso, 480); }, 560);
       } else {
+        i++;
         el.appendChild(nodo(x, true)); bajar();
         t = setTimeout(paso, x[0] === 'd' ? 280 : x[0] === 'o' ? 600 : 800);
       }
@@ -871,6 +888,9 @@ window.EVALUACION = window.EVALUACION || /*__CONFIG__*/null;
   var rx = document.querySelector('.rx'), panelHoy = $('panel-hoy'), panelExp = $('panel-exp');
   var TITULOS = C.titulos, GUIAS = C.guias, LEYENDAS = C.leyendas;
   txt('t-rx', TITULOS.hoy); txt('guia', GUIAS.hoy); txt('leyenda', LEYENDAS.hoy);
+  // «Toca un hallazgo…» solo si hay alguno que se pueda tocar.
+  function verGuia(m){ $('guia').parentNode.hidden = m === 'hoy' && !document.querySelector('[data-ir]'); }
+  verGuia('hoy');
 
   function cambiar(m, sinArranque){
     var cambio = m !== modo;
@@ -883,7 +903,7 @@ window.EVALUACION = window.EVALUACION || /*__CONFIG__*/null;
     txt('leyenda', LEYENDAS[m]);
     rx.dataset.modo = m;
     txt('t-rx', TITULOS[m]);
-    txt('guia', GUIAS[m]);
+    txt('guia', GUIAS[m]); verGuia(m);
     [['hoy', panelHoy], ['exp', panelExp]].forEach(function(p){
       var activo = p[0] === m, el = p[1];
       el.setAttribute('aria-hidden', activo ? 'false' : 'true');

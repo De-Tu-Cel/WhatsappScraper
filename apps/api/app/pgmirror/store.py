@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 
 from psycopg import sql
 
@@ -237,6 +238,22 @@ class Store:
                 conn.execute("SELECT pg_advisory_unlock(%s)", (_INDEX_LOCK_KEY,))
         self._maintained.add((collection, "unicos"))
         return True
+
+    def wait_for_unique_indexes(self, collection: str, timeout: float = 5) -> bool:
+        """Allow cold concurrent writers to wait for the index builder.
+
+        Maintenance still uses the nonblocking ensure method. Writers release
+        their pool connection between attempts so the builder can finish.
+        Already valid indexes need no maintenance lock.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.unique_ready(collection) or self.ensure_unique_indexes(collection):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(.05, remaining))
 
     def unique_ready(self, collection: str) -> bool:
         """¿Están los índices únicos de esta colección? (sin ellos, primary no escribe en Postgres)."""

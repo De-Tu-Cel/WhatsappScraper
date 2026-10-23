@@ -1,4 +1,5 @@
 const { withTypingPresence, setIdlePresence } = require('./typingPresence')
+const { messageId: providerMessageId } = require('./messageIdentity')
 const express = require('express')
 // Must run before Client imports the injected LoadUtils function.
 require('./patchMediaModel').ensureMediaModelPatch()
@@ -1054,7 +1055,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
         body: messageBody,
         whatsappName,
         type: msg.type,
-        messageId: msg.id._serialized,
+        messageId: providerMessageId(msg),
         timestamp: msg.timestamp,
         hasMedia: msg.hasMedia,
         media,
@@ -1084,7 +1085,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
         s.ackFailStreak = 0
         if (s.ackDegraded) {
           s.ackDegraded = false
-          forwardWebhook({ event: 'message_ack', sessionId, data: { messageId: msg.id._serialized, ack, to: msg.to, number } })
+          forwardWebhook({ event: 'message_ack', sessionId, data: { messageId: providerMessageId(msg), ack, to: msg.to, number } })
         }
       } else if (ack === 1) {
         s.ackFailStreak = (s.ackFailStreak || 0) + 1
@@ -1096,7 +1097,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
       }
     }
 
-    forwardWebhook({ event: 'message_ack', sessionId, data: { messageId: msg.id._serialized, ack, to: msg.to, number } })
+    forwardWebhook({ event: 'message_ack', sessionId, data: { messageId: providerMessageId(msg), ack, to: msg.to, number } })
   })
 
   // Stored so destroySessionClient() can wait for this launch to actually
@@ -1397,7 +1398,7 @@ app.post('/session/:id/send', lineActivity.wrap('send', async (req, res) => {
     if (msg === closedMarker) return rejectClosedWindow()
     session.lastSendAt = Date.now()
     console.log(`[${id}] → ${digits} (${message.length} chars, ${delay}ms typing, gap=${elapsed}ms)`)
-    res.json({ success: true, messageId: msg?.id?._serialized, typing: presence })
+    res.json({ success: true, messageId: providerMessageId(msg), typing: presence })
   } catch (e) {
     if (e.code && ['SEND_WINDOW_CLOSED', 'LINE_UNAVAILABLE', 'ACTIVITY_CANCELLED'].includes(e.code)) throw e
     console.error(`[${id}] send error:`, e.message)
@@ -1447,7 +1448,7 @@ app.post('/session/:id/send-media', lineActivity.wrap('send-media', async (req, 
 
     console.log(`[${id}] ✓ media sent → ${digits} (${media.mimetype}) ${filename || ''}`)
     // A missing optional message ID must not turn an accepted send into a failure.
-    res.json({ success: true, messageId: msg?.id?._serialized || null, phone: digits, mimetype: media.mimetype, typing: presence })
+    res.json({ success: true, messageId: providerMessageId(msg), phone: digits, mimetype: media.mimetype, typing: presence })
   } catch (e) {
     if (e.code && ['SEND_WINDOW_CLOSED', 'LINE_UNAVAILABLE', 'ACTIVITY_CANCELLED'].includes(e.code)) throw e
     console.error(`[${id}] send-media error:`, e.message)

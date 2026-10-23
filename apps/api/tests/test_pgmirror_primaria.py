@@ -436,6 +436,68 @@ def test_postgres_only_never_uses_raw_operations_or_copies(entorno, monkeypatch)
     assert col._rt.store.query('SELECT count(*) FROM mongo._outbox WHERE collection=%s', (col.name,))[0][0] == 0
 
 
+def test_cold_concurrent_writes_wait_for_unique_indexes(entorno, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import psycopg
+    from app.pgmirror import store as store_module
+
+    _db, nueva = entorno
+    col, copy, _ref = nueva()
+    monkeypatch.setenv('PGMIRROR_POSTGRES_ONLY', '1')
+    monkeypatch.setitem(store_module.UNICOS, col.name, [('domain', 'sparse')])
+    store = col._rt.store
+    attempted = set()
+    lock = threading.Lock()
+    all_waiting = threading.Event()
+    original = store.ensure_unique_indexes
+
+    def observed(name):
+        result = original(name)
+        if not result:
+            with lock:
+                attempted.add(threading.get_ident())
+                if len(attempted) == 6:
+                    all_waiting.set()
+        return result
+
+    monkeypatch.setattr(store, 'ensure_unique_indexes', observed)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        with psycopg.connect(TEST_PG, autocommit=True) as holder:
+            holder.execute('SELECT pg_advisory_lock(%s)', (store_module._INDEX_LOCK_KEY,))
+            try:
+                futures = [pool.submit(col.insert_one, {'_id': str(i), 'domain': f'{i}.example.com'})
+                           for i in range(6)]
+                assert all_waiting.wait(3), 'All writers should wait for the index builder'
+                assert not any(f.done() for f in futures)
+            finally:
+                holder.execute('SELECT pg_advisory_unlock(%s)', (store_module._INDEX_LOCK_KEY,))
+        for future in futures:
+            future.result(timeout=10)
+    assert col.count_documents({}) == 6
+    assert copy.count_documents({}) == 0
+    assert store.unique_ready(col.name)
+    with pytest.raises(pymongo.errors.DuplicateKeyError):
+        col.insert_one({'_id': 'duplicate', 'domain': '0.example.com'})
+
+
+def test_unique_index_wait_is_bounded_and_fails_closed(entorno, monkeypatch):
+    import psycopg
+    from app.pgmirror import store as store_module
+
+    _db, nueva = entorno
+    col, copy, _ref = nueva()
+    monkeypatch.setitem(store_module.UNICOS, col.name, [('domain', 'sparse')])
+    with psycopg.connect(TEST_PG, autocommit=True) as holder:
+        holder.execute('SELECT pg_advisory_lock(%s)', (store_module._INDEX_LOCK_KEY,))
+        try:
+            assert not col._rt.store.wait_for_unique_indexes(col.name, timeout=.05)
+        finally:
+            holder.execute('SELECT pg_advisory_unlock(%s)', (store_module._INDEX_LOCK_KEY,))
+    assert copy.count_documents({}) == 0
+    assert col.count_documents({}) == 0
+
+
 def test_pending_copy_survives_new_runtime(entorno, monkeypatch):
     raw_db, nueva = entorno
     coleccion, copia, _ref = nueva()

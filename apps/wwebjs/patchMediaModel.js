@@ -6,15 +6,27 @@ function patchSource(source) {
   const start = source.indexOf('window.WWebJS.sendMessage = async')
   const end = source.indexOf('window.WWebJS.editMessage = async', start)
   if (start < 0 || end < 0) throw new Error('Unsupported whatsapp-web.js sendMessage layout')
-  const send = source.slice(start, end)
-  if (send.includes('delete message.__x_id;')) return source
+  let send = source.slice(start, end)
   const anchor = "        // Bot's won't reply if canonicalUrl is set (linking)"
-  if (send.split(anchor).length !== 2 || !send.includes('...mediaOptions,')) {
+  if (!send.includes('delete message.__x_id;') &&
+      (send.split(anchor).length !== 2 || !send.includes('...mediaOptions,'))) {
     throw new Error('Media ID patch requires review for this whatsapp-web.js version')
   }
-  return source.slice(0, start) + send.replace(anchor,
-    '        // MediaData private ID must not overwrite the outgoing MsgKey.\n' +
-    '        delete message.__x_id;\n\n' + anchor) + source.slice(end)
+  if (!send.includes('delete message.__x_id;')) {
+    send = send.replace(anchor,
+      '        // MediaData private ID must not overwrite the outgoing MsgKey.\n' +
+      '        delete message.__x_id;\n\n' + anchor)
+  }
+  if (!send.includes('Msg.get(newMsgKey._serialized || newMsgKey)')) {
+    const lookup = /\.Msg\.get\(newMsgKey\._serialized\);/g
+    if ((send.match(lookup) || []).length !== 1) {
+      throw new Error('Outgoing MsgKey lookup requires review for this whatsapp-web.js version')
+    }
+    // Current WA keys can omit _serialized. Collection.get accepts the key
+    // object itself; using undefined loses the result of an accepted send.
+    send = send.replace(lookup, '.Msg.get(newMsgKey._serialized || newMsgKey);')
+  }
+  return source.slice(0, start) + send + source.slice(end)
 }
 
 function ensureMediaModelPatch() {

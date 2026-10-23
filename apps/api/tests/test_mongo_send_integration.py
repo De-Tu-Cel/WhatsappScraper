@@ -226,7 +226,9 @@ def api(mongo, monkeypatch, request):
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
             manager.db.fake_deliveries.insert_one({'path': self.path, 'payload': payload})
             self.send_response(200); self.end_headers()
-            self.wfile.write(b'{"success":true,"messageId":null,"typing":{"started":true}}')
+            self.wfile.write(json.dumps({'success': True,
+                'messageId': getattr(manager, 'qa_provider_message_id', None),
+                'typing': {'started': True}}).encode())
     server = ThreadingHTTPServer(('127.0.0.1', 0), Provider)
     thread = Thread(target=server.serve_forever, daemon=True); thread.start()
     url = f'http://127.0.0.1:{server.server_port}'
@@ -289,6 +291,28 @@ def test_incoming_webhook_persists_and_schedules_analysis_and_followup(api, monk
     response = client.post('/api/wwebjs/webhook', headers={'x-api-secret': 'isolated-webhook-secret'}, json=payload)
     assert response.json()['action'] == 'ignored_internal'
     assert manager.db.message_logs.count_documents({'message_id': 'qa-internal'}) == 0
+
+
+@pytest.mark.parametrize('provider_id', ['3EB-PROVIDER-KEY', 'true_525500000001@c.us_LEGACY'])
+def test_provider_id_persists_and_ack_updates_without_status_regression(api, monkeypatch, provider_id):
+    from app import whatsapp_wwebjs
+    client, manager = api
+    manager.qa_provider_message_id = provider_id
+    monkeypatch.setattr(whatsapp_wwebjs, 'API_SECRET', 'isolated-webhook-secret')
+    body = {'request_id': 'provider-id-operation', 'company_id': '',
+            'to_number': '525500000001', 'message': 'Synthetic provider ID test', 'instance': 'qa-a'}
+    for _ in range(2):
+        response = client.post('/api/send-message', headers={'x-user-token': 'admin'}, json=body)
+        assert response.status_code == 200, response.text
+        assert response.json()['message_id'] == provider_id
+    assert manager.db.fake_deliveries.count_documents({}) == 1
+    assert manager.db.message_logs.count_documents({'message_id': provider_id}) == 1
+    for ack, expected in [(2, 'delivered'), (3, 'read'), (2, 'read'), (3, 'read')]:
+        response = client.post('/api/wwebjs/webhook', headers={'x-api-secret': 'isolated-webhook-secret'},
+            json={'event': 'message_ack', 'sessionId': 'qa-a',
+                  'data': {'messageId': provider_id, 'ack': ack, 'number': '525500000001'}})
+        assert response.status_code == 200
+        assert manager.db.message_logs.find_one({'message_id': provider_id})['status'] == expected
 
 
 def test_real_api_permission_send_replay_and_cross_line_opt_out(api):

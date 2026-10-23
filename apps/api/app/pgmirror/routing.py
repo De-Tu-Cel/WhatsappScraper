@@ -657,7 +657,7 @@ class RoutedCollection:
             pymongo_common.validate_is_mapping("filter", filter_)
         kw = primaria.argumentos(method, args, kwargs)
         escritor = self._escritor_pg()
-        if config.postgres_only() and not self._rt.store.ensure_unique_indexes(self._name):
+        if config.postgres_only() and not self._rt.store.wait_for_unique_indexes(self._name):
             raise RuntimeError(f'Postgres unique indexes are not ready for {self._name}')
         if primaria.soporta(method, documento, kw) and self._rt.store.unique_ready(self._name):
             try:

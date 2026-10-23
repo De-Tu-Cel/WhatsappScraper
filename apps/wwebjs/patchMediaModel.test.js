@@ -7,11 +7,11 @@ const { patchSource, ensureMediaModelPatch } = require('./patchMediaModel')
 const installed = fs.readFileSync(require.resolve('whatsapp-web.js/src/util/Injected/Utils.js'), 'utf8')
 const original = installed.replace(/        \/\/ MediaData private ID must not overwrite the outgoing MsgKey\.\r?\n        delete message\.__x_id;\r?\n\r?\n/, '')
 
-function sender(source) {
+function sender(source, { serialized = true } = {}) {
   let sent = null
   let calls = 0
   class MsgKey {
-    constructor(data) { Object.assign(this, data); this._serialized = 'qa-message' }
+    constructor(data) { Object.assign(this, data); if (serialized) this._serialized = 'qa-message' }
     static async newId() { return 'new-id' }
   }
   const modules = {
@@ -27,7 +27,7 @@ function sender(source) {
       sent = message; calls++
       return [Promise.resolve(message), Promise.resolve()]
     } },
-    WAWebCollections: { Msg: { get: () => sent } },
+    WAWebCollections: { Msg: { get: key => key && (key === 'qa-message' || key === sent?.id) ? sent : undefined } },
   }
   const window = { WWebJS: {
     processMediaData: async () => ({ __x_id: undefined, mediaHandle: 'upload-handle',
@@ -73,4 +73,17 @@ test('installation is idempotent and unknown dependency layouts require review',
   ensureMediaModelPatch()
   const utils = require('whatsapp-web.js/src/util/Injected/Utils.js')
   assert.match(utils.LoadUtils.toString(), /delete message\.__x_id/)
+})
+
+test('accepted text and document keep their provider IDs when _serialized is absent', async () => {
+  const { messageId } = require('./messageIdentity')
+  const unpatchedLookup = patchSource(original).replace(
+    '.Msg.get(newMsgKey._serialized || newMsgKey);', '.Msg.get(newMsgKey._serialized);')
+  assert.equal(await sender(unpatchedLookup, { serialized: false }).send({}), undefined)
+  for (const options of [{}, { media: {}, sendMediaAsDocument: true }]) {
+    const client = sender(patchSource(unpatchedLookup), { serialized: false })
+    const msg = await client.send(options)
+    assert.equal(messageId(msg), 'new-id')
+    assert.equal(client.calls(), 1)
+  }
 })

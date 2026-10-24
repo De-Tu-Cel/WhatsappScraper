@@ -249,6 +249,12 @@ def _run_lead(mgr, lead, is_wa, profile=PROFILE):
 class TestProcessMapsLead:
     LEAD = searcher._maps_lead_from_item(_item(), "+52", listed_url="https://www.instagram.com/panecito/")
 
+    def test_new_lead_is_queued_for_crm(self):
+        mgr = _FakeMgr()
+        with patch.object(pipeline, "crm_enqueue") as q:
+            out = _run_lead(mgr, self.LEAD, True)
+        q.assert_called_once_with(mgr.db, out["company_id"])
+
     def test_new_business_with_whatsapp(self):
         mgr = _FakeMgr()
         out = _run_lead(mgr, self.LEAD, True)
@@ -397,6 +403,48 @@ class TestIndustryMismatch:
 
     def test_unknown_giro_category_is_not_flagged(self):
         assert self._run("Eventos / Entretenimiento", "") is None
+
+
+class TestProcessUrlQueuesForCrm:
+    def _run(self, wa):
+        oid = ObjectId()
+        mgr = _FakeMgr(companies=[{"_id": oid, "name": "Panaderia"}])
+        mgr.insert_person_contact = lambda c: None
+        scraped = {"name": "Panaderia", "industry": "Alimentos", "description": "", "metadata": {},
+                   "_company_id": oid, "_db_action": "created", "_extra": {},
+                   "_contacts_raw": {"whatsapp_numbers": wa, "all_whatsapp_numbers": wa, "phone_numbers": [],
+                                     "emails": [], "persons": []}}
+        with patch.object(pipeline, "MongoDBManager", return_value=mgr), \
+             patch.object(pipeline, "_check_blacklist", return_value=None), \
+             patch.object(pipeline, "crm_enqueue") as q, \
+             patch.object(pipeline.WebsiteScraper, "scrape_site", return_value=scraped), \
+             patch("whatsapp_wwebjs.get_all_connected_instances", return_value=[]):
+            out = pipeline.process_url("https://panaderia.mx/")
+        return out, mgr, q
+
+    def test_scraped_company_is_queued(self):
+        out, mgr, q = self._run(["+524422087967"])
+        q.assert_called_once_with(mgr.db, out["company_id"])
+
+    def test_directory_blacklist_is_not_queued(self):
+        wa = [f"+52{lada}5551234" for lada in ["222", "552", "557", "333", "353", "982", "999", "833"]]
+        oid = ObjectId()
+        mgr = _FakeMgr(companies=[{"_id": oid, "name": "Dir"}])
+        mgr.db.contacts.delete_many = lambda q: None
+        mgr.db.companies.delete_one = lambda q: None
+        mgr.insert_person_contact = lambda c: None
+        scraped = {"name": "Dir", "industry": "X", "description": "", "metadata": {}, "_company_id": oid,
+                   "_db_action": "created", "_extra": {},
+                   "_contacts_raw": {"whatsapp_numbers": wa, "all_whatsapp_numbers": wa, "phone_numbers": [],
+                                     "emails": [], "persons": []}}
+        with patch.object(pipeline, "MongoDBManager", return_value=mgr), \
+             patch.object(pipeline, "_check_blacklist", return_value=None), \
+             patch.object(pipeline, "crm_enqueue") as q, \
+             patch.object(pipeline.WebsiteScraper, "scrape_site", return_value=scraped), \
+             patch("whatsapp_wwebjs.get_all_connected_instances", return_value=[]):
+            out = pipeline.process_url("https://dir.mx/")
+        assert out["blacklisted"]
+        q.assert_not_called()
 
 
 class TestDirectoryDetection:

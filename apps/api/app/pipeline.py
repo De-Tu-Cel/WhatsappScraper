@@ -19,6 +19,7 @@ from config import (
 from database import MongoDBManager
 from scraper import WebsiteScraper
 from whatsapp_client import WhatAppClient
+from app.integrations.crm.outbox import enqueue as crm_enqueue
 from providers.legacy.evolution import EvolutionClient
 
 DEFAULT_MESSAGE = "Hola, encontré tu negocio en línea y me gustaría presentarte algo que puede ayudarte. ¿Tienes un momento? 😊"
@@ -632,6 +633,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     # ========================================================================
     # RETORNAR RESULTADO COMPLETO
     # ========================================================================
+    crm_enqueue(db.db, company_id)
     return {
         "website": website,
         "company_id": company_id,
@@ -834,6 +836,7 @@ def process_maps_lead(maps_url: str, lead: dict = None) -> dict:
         "_extra": {"city": company.get("city") or "", "state": company.get("state") or "",
                    "services": company.get("services") or []},
     }
+    crm_enqueue(db.db, company_id)
     return {
         "website": maps_url,
         "company_id": company_id,

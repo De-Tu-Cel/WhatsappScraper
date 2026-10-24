@@ -90,6 +90,8 @@ async def lifespan(app: FastAPI):
     start_scrape_worker()
     start_send_now_worker()
     start_followup_workers()
+    from app.integrations.crm.worker import start_crm_sync_worker
+    _crm_stop = start_crm_sync_worker()
     # Migración a Postgres: con colecciones activas en DB_MODES, arranca la vigilancia y la
     # conciliación automática (app/pgmirror/health.py). Sin POSTGRES_URL no hace nada.
     try:
@@ -119,6 +121,8 @@ async def lifespan(app: FastAPI):
     finally:
         _balance_stop.set()
         _phone_verification_stop.set()
+        if _crm_stop:
+            _crm_stop.set()
 
 
 app = FastAPI(title="Lector Comercial API", lifespan=lifespan)

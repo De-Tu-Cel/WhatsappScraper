@@ -46,6 +46,8 @@ services:
       # DB_MODES lista el modo de cada colección: settings=dual,message_templates=dual,...
       - POSTGRES_URL=${POSTGRES_URL:-}
       - DB_MODES=${DB_MODES:-}
+      - CRM_INGEST_URL=${CRM_INGEST_URL:-}
+      - CRM_API_KEY=${CRM_API_KEY:-}
       # Opcionales (vacías = 24 h de espera por modo y conciliación cada 3 h).
       - PGMIRROR_WAIT_HOURS=${PGMIRROR_WAIT_HOURS:-}
       - PGMIRROR_RECONCILE_HOURS=${PGMIRROR_RECONCILE_HOURS:-}

@@ -200,6 +200,15 @@ Lógica en `daily_cap.py`.
 - Crear usuario (nombre, username, email, PIN), resetear PIN, eliminar, cambiar rol.
 - Ver todos los usuarios del sistema con estadísticas agregadas.
 
+#### Envío de prospectos a dtc-crm (`app/integrations/crm/`)
+
+- Apagado por defecto. No cambia nada si las variables no están definidas.
+- Solo envía prospectos encontrados (URL individual/lote y Google Maps) con al menos un canal de contacto y sin marca de ubicación o giro incorrecto.
+- Para activarlo: define `CRM_INGEST_URL` (p. ej. `https://crm.example.com/api/v1`) y `CRM_API_KEY` (créala en Settings de dtc-crm). Ambas son obligatorias.
+- Cada prospecto se encola en la colección `crm_outbox` y un worker en segundo plano lo envía. Para ver el estado, revisa el campo `status` de los documentos en `crm_outbox`.
+- Opcional: agrega `crm_outbox=primary` a `DB_MODES` para llevar esa colección en Postgres.
+- Para enviar los prospectos ya existentes: `apps/api/scripts/crm_backfill.py` (se agrega en la siguiente tarea).
+
 ---
 
 ## Requisitos previos

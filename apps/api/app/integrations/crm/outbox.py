@@ -16,6 +16,7 @@ LEASE_SEC = 120
 MAX_ATTEMPTS = 10
 BACKOFF_BASE_SEC = 30
 BACKOFF_MAX_SEC = 3600
+STATUSES = ("pending", "sending", "sent", "skipped", "failed")
 
 
 def _now() -> datetime:
@@ -40,7 +41,8 @@ def enqueue(db, company_id) -> None:
 
 def claim_next(db, now=None):
     """Atomically take one due document (pending, or sending with expired lease)."""
-    now = now or _now()
+    if now is None:
+        now = _now()
     return db.crm_outbox.find_one_and_update(
         {"$or": [
             {"status": "pending", "next_attempt_at": {"$lte": now}},
@@ -53,7 +55,13 @@ def claim_next(db, now=None):
 
 
 def _set(db, doc, fields) -> None:
-    db.crm_outbox.update_one({"_id": doc["_id"]}, {"$set": {**fields, "updated_at": _now()}})
+    """Write only if `doc` is still the active claim (status sending, same lease)."""
+    res = db.crm_outbox.update_one(
+        {"_id": doc["_id"], "status": "sending", "lease_until": doc.get("lease_until")},
+        {"$set": {**fields, "updated_at": _now()}},
+    )
+    if res.matched_count == 0:
+        log.info("crm outbox write for %s ignored: claim superseded", doc["_id"])
 
 
 def mark_done(db, doc, status) -> None:
@@ -75,9 +83,6 @@ def mark_retry(db, doc, error: str) -> None:
 
 def mark_failed(db, doc, error: str) -> None:
     _set(db, doc, {"status": "failed", "lease_until": None, "last_error": error})
-
-
-STATUSES = ("pending", "sending", "sent", "skipped", "failed")
 
 
 def counts(db) -> dict:

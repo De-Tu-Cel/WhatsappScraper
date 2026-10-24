@@ -96,12 +96,11 @@ def test_retry_backoff_and_give_up_after_10(db, env):
     assert row["last_error"] == "boom"
     assert _naive(row["next_attempt_at"]) == _naive(T0 + timedelta(seconds=60))
     for _ in range(8):
-        row = db.crm_outbox.find_one({"_id": "c1"})
-        mark_retry(db, row, "boom")
+        mark_retry(db, claim_next(db, now=T0 + timedelta(days=1)), "boom")
     row = db.crm_outbox.find_one({"_id": "c1"})
     assert row["status"] == "pending" and row["attempts"] == 9
     assert _naive(row["next_attempt_at"]) == _naive(T0 + timedelta(seconds=3600))
-    mark_retry(db, row, "boom")
+    mark_retry(db, claim_next(db, now=T0 + timedelta(days=1)), "boom")
     row = db.crm_outbox.find_one({"_id": "c1"})
     assert row["status"] == "failed" and row["attempts"] == 10
 
@@ -127,3 +126,25 @@ def test_counts_by_status(db, env):
     enqueue(db, "c2")
     mark_done(db, claim_next(db, now=T0), "skipped")
     assert counts(db) == {"skipped": 1, "pending": 1}
+
+
+def test_mark_after_reenqueue_is_ignored(db, env):
+    enqueue(db, "c1")
+    doc = claim_next(db, now=T0)
+    enqueue(db, "c1")
+    mark_done(db, doc, "sent")
+    assert db.crm_outbox.find_one({"_id": "c1"})["status"] == "pending"
+
+
+def test_late_mark_from_expired_claim_is_ignored(db, env):
+    enqueue(db, "c1")
+    first = claim_next(db, now=T0)
+    second = claim_next(db, now=T0 + timedelta(seconds=121))
+    assert second["_id"] == "c1"
+    mark_retry(db, first, "late")
+    mark_done(db, first, "sent")
+    row = db.crm_outbox.find_one({"_id": "c1"})
+    assert row["status"] == "sending" and row["attempts"] == 0
+    assert row.get("last_error") is None
+    mark_done(db, second, "sent")
+    assert db.crm_outbox.find_one({"_id": "c1"})["status"] == "sent"

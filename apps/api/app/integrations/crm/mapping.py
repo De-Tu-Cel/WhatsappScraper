@@ -1,10 +1,10 @@
 """Pure mapping/eligibility helpers: scraper prospects -> dtc-crm ingest payloads."""
 import re
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", re.ASCII)
 _CHANNELS = ("whatsapp", "phone", "email")
 _COUNTRIES = {"méxico": "MX", "mexico": "MX"}
-_PHONE_RE = re.compile(r"\+?[0-9\s\-()]{7,20}")  # same as the CRM's validation
+_PHONE_RE = re.compile(r"\+?[0-9\s\-()]{7,20}", re.ASCII)  # same as the CRM's validation
 _MIN_PHONE_DIGITS = 8
 _EMAIL_MAX = 254
 

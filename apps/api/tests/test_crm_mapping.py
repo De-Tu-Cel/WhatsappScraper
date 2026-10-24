@@ -75,6 +75,12 @@ def test_phone_must_match_crm_regex_and_have_8_digits():
     assert "phone" not in company_payload(COMPANY, [{**base, "value": "123-45"}])
 
 
+def test_phone_with_unicode_space_is_dropped():
+    # CRM regex has no /u flag: NBSP (U+00A0) is not whitespace there, so it must not pass.
+    for bad in ("+52 442 123 4567", "+52 442 123 4567"):
+        assert "phone" not in company_payload(COMPANY, [{"type": "phone", "value": bad}]), bad
+
+
 def test_email_over_254_chars_is_dropped():
     long = "a" * 250 + "@x.mx"
     assert "email" not in company_payload(COMPANY, [{"type": "email", "value": long}])

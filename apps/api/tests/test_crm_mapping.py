@@ -62,3 +62,34 @@ def test_person_names_split_and_single_name_gets_dash():
     assert c0["mobile"] == "+524429999999" and "phone" not in c0 and c0["email"] == "j@sol.mx"
     assert leads[1]["contact"]["first_name"] == "Ventas" and leads[1]["contact"]["last_name"] == "-"
     assert leads[0]["company"] == company_payload(COMPANY, CONTACTS)
+
+
+def test_phone_must_match_crm_regex_and_have_8_digits():
+    base = {"type": "phone"}
+    for bad in ("442.123.4567", "442 123 4567 ext 12", "442/123/4567", "442abc1234567",
+                "1" * 21, "+52 (442) 123-45-67-89-0123"):
+        payload = company_payload(COMPANY, [{**base, "value": bad}])
+        assert "phone" not in payload, bad
+    for good in ("+52 (442) 123-4567", "442 123 4567", "+524421234567"):
+        assert company_payload(COMPANY, [{**base, "value": good}])["phone"] == good
+    assert "phone" not in company_payload(COMPANY, [{**base, "value": "123-45"}])
+
+
+def test_email_over_254_chars_is_dropped():
+    long = "a" * 250 + "@x.mx"
+    assert "email" not in company_payload(COMPANY, [{"type": "email", "value": long}])
+
+
+def test_first_valid_value_of_each_type_is_used():
+    contacts = [
+        {"type": "email", "value": "not-an-email"}, {"type": "email", "value": "ok@sol.mx"},
+        {"type": "phone", "value": "12"}, {"type": "phone", "value": "442 123 4567"},
+        {"type": "whatsapp", "value": "x.y"}, {"type": "whatsapp", "value": "+524420000000"},
+    ]
+    p = company_payload(COMPANY, contacts)
+    assert (p["email"], p["phone"], p["whatsapp"]) == ("ok@sol.mx", "442 123 4567", "+524420000000")
+
+
+def test_empty_name_is_not_eligible():
+    assert is_eligible({**COMPANY, "name": "  "}, CONTACTS) is False
+    assert is_eligible({k: v for k, v in COMPANY.items() if k != "name"}, CONTACTS) is False

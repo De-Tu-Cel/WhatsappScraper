@@ -112,3 +112,42 @@ def test_start_returns_stop_event_and_stops(monkeypatch):
     stop = worker.start_crm_sync_worker()
     assert stop is not None
     stop.set()
+
+
+def test_unavailable_never_becomes_failed(db):
+    cid = _company(db)
+    fake = Fake(CrmUnavailable("/ingest/companies: HTTP 503"))
+    for _ in range(15):
+        db.crm_outbox.update_one({"_id": str(cid)}, {"$set": {"next_attempt_at": T0}})
+        worker.process_one(db, fake.company, fake.lead)
+    assert _status(db, cid)["status"] == "pending"
+    assert _status(db, cid)["attempts"] == 15
+
+
+def test_unexpected_error_still_fails_at_10(db):
+    cid = _company(db)
+    fake = Fake(ValueError("boom"))
+    for _ in range(10):
+        db.crm_outbox.update_one({"_id": str(cid)}, {"$set": {"next_attempt_at": T0}})
+        worker.process_one(db, fake.company, fake.lead)
+    assert _status(db, cid)["status"] == "failed"
+
+
+def test_auth_failure_logs_warning(db, caplog):
+    _company(db)
+    fake = Fake(CrmUnavailable("/ingest/companies: HTTP 401 nope"))
+    with caplog.at_level("WARNING", logger="crm_sync"):
+        worker.process_one(db, fake.company, fake.lead)
+    assert any("401" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_objectid_keyed_contacts_and_persons_are_found(db):
+    cid = ObjectId()
+    db.companies.insert_one({"_id": cid, "name": "Sol", "status": "new"})
+    db.contacts.insert_one({"company_id": cid, "type": "email", "value": "a@sol.mx"})
+    db.person_contacts.insert_one({"company_id": cid, "name": "Ana Lopez"})
+    outbox.enqueue(db, str(cid))
+    fake = Fake()
+    worker.process_one(db, fake.company, fake.lead)
+    assert _status(db, cid)["status"] == "sent"
+    assert fake.companies[0]["email"] == "a@sol.mx" and len(fake.leads) == 1

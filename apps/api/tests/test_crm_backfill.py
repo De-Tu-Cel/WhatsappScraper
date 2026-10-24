@@ -76,3 +76,12 @@ def test_main_with_yes_fails_when_disabled(db, monkeypatch, capsys):
     assert backfill.main(["--yes"], db=db) != 0
     assert db.crm_outbox.count_documents({}) == 0
     assert "CRM_INGEST_URL" in capsys.readouterr().out
+
+
+def test_objectid_keyed_contacts_are_found(db, monkeypatch):
+    from bson import ObjectId
+    monkeypatch.setattr(backfill, "CHUNK", 2)
+    ids = [_company(db, status="found") for _ in range(3)]
+    for cid in ids:
+        _contact(db, ObjectId(cid))
+    assert sorted(backfill.select_company_ids(db)) == sorted(ids)

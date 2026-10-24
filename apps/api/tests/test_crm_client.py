@@ -50,6 +50,7 @@ def test_posts_with_bearer_and_returns_json(monkeypatch, env):
     assert kw["json"] == {"a": 1}
     assert kw["headers"] == {"Authorization": f"Bearer {KEY}"}
     assert kw["timeout"] == 10
+    assert kw["allow_redirects"] is False
     assert calls[1][0] == "https://crm.example.com/ingest/leads"
 
 
@@ -59,13 +60,13 @@ def test_422_is_rejected_5xx_and_timeout_are_unavailable(monkeypatch, env):
 
     respond(200)
     assert client.send_lead({}) == {}
-    for status in (422, 400, 404):
+    for status in (422, 400):
         respond(status)
         with pytest.raises(client.CrmRejected) as ei:
             client.send_lead({})
         assert str(status) in str(ei.value)
         assert len(str(ei.value)) < 400
-    for status in (401, 403, 429, 500, 503):
+    for status in (401, 403, 404, 405, 429, 301, 302, 307, 308, 500, 503):
         respond(status)
         with pytest.raises(client.CrmUnavailable):
             client.send_lead({})

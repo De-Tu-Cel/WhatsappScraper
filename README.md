@@ -208,6 +208,8 @@ Lógica en `daily_cap.py`.
 - Cada prospecto se encola en la colección `crm_outbox` y un worker en segundo plano lo envía. Para ver el estado, revisa el campo `status` de los documentos en `crm_outbox`.
 - Opcional: agrega `crm_outbox=primary` a `DB_MODES` para llevar esa colección en Postgres.
 - Para enviar los prospectos ya existentes: desde `apps/api` corre `python scripts/crm_backfill.py` (solo cuenta cuántos encolaría) y luego `python scripts/crm_backfill.py --yes` (los encola; requiere `CRM_INGEST_URL` y `CRM_API_KEY`).
+- Volver a correr `crm_backfill.py --yes` re-encola todo (incluidos los `failed` y los ya enviados); es seguro porque el CRM hace upsert.
+- `CRM_INGEST_URL` debe ser la URL base https exacta: no se siguen redirecciones (3xx, 404 y 405 se reintentan como error de configuración).
 
 ---
 

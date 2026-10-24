@@ -4,7 +4,9 @@ import re
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _CHANNELS = ("whatsapp", "phone", "email")
 _COUNTRIES = {"méxico": "MX", "mexico": "MX"}
+_PHONE_RE = re.compile(r"\+?[0-9\s\-()]{7,20}")  # same as the CRM's validation
 _MIN_PHONE_DIGITS = 8
+_EMAIL_MAX = 254
 
 
 def _s(value) -> str:
@@ -13,19 +15,21 @@ def _s(value) -> str:
 
 def _valid_phone(value) -> str:
     value = _s(value)
-    return value if sum(c.isdigit() for c in value) >= _MIN_PHONE_DIGITS else ""
+    ok = _PHONE_RE.fullmatch(value) and sum(c.isdigit() for c in value) >= _MIN_PHONE_DIGITS
+    return value if ok else ""
 
 
 def _valid_email(value) -> str:
     value = _s(value)
-    return value if _EMAIL_RE.match(value) else ""
+    return value if len(value) <= _EMAIL_MAX and _EMAIL_RE.match(value) else ""
 
 
-def _first(contacts: list[dict], kind: str, prefer_primary: bool = False) -> str:
-    values = [c for c in contacts if c.get("type") == kind and _s(c.get("value"))]
+def _first(contacts: list[dict], kind: str, valid, prefer_primary: bool = False) -> str:
+    """First valid value of `kind` (primary ones first when asked)."""
+    values = [c for c in contacts if c.get("type") == kind]
     if prefer_primary:
         values.sort(key=lambda c: not c.get("is_primary"))
-    return _s(values[0]["value"]) if values else ""
+    return next((v for v in (valid(c.get("value")) for c in values) if v), "")
 
 
 def _compact(d: dict) -> dict:
@@ -33,6 +37,8 @@ def _compact(d: dict) -> dict:
 
 
 def is_eligible(company: dict, contacts: list[dict]) -> bool:
+    if not _s(company.get("name")):
+        return False
     if company.get("status") in ("manual", "inbound"):
         return False
     if company.get("source") == "inbound_whatsapp":
@@ -61,9 +67,9 @@ def company_payload(company: dict, contacts: list[dict]) -> dict:
         "source": "scraper",
         "external_ref": str(company["_id"]),
         "website": _s(company.get("website")),
-        "phone": _valid_phone(_first(contacts, "phone")),
-        "whatsapp": _valid_phone(_first(contacts, "whatsapp", prefer_primary=True)),
-        "email": _valid_email(_first(contacts, "email")),
+        "phone": _first(contacts, "phone", _valid_phone),
+        "whatsapp": _first(contacts, "whatsapp", _valid_phone, prefer_primary=True),
+        "email": _first(contacts, "email", _valid_email),
         "address": address,
         "country": _COUNTRIES.get(_s(company.get("country")).lower(), ""),
         "notes": "\n".join(n for n in notes if n),

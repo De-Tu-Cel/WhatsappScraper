@@ -12,7 +12,7 @@ from app.integrations.crm import config
 
 log = logging.getLogger("crm_sync")
 
-LEASE_SEC = 120
+LEASE_SEC = 300
 MAX_ATTEMPTS = 10
 BACKOFF_BASE_SEC = 30
 BACKOFF_MAX_SEC = 3600
@@ -70,13 +70,14 @@ def mark_done(db, doc, status) -> None:
     _set(db, doc, {"status": status, "lease_until": None, "last_error": None})
 
 
-def mark_retry(db, doc, error: str) -> None:
+def mark_retry(db, doc, error: str, give_up: bool = True) -> None:
+    """Back off and retry; with give_up, fail after MAX_ATTEMPTS (else retry forever)."""
     attempts = doc.get("attempts", 0) + 1
-    if attempts >= MAX_ATTEMPTS:
+    if give_up and attempts >= MAX_ATTEMPTS:
         _set(db, doc, {"status": "failed", "attempts": attempts, "lease_until": None,
                        "last_error": error})
         return
-    delay = min(BACKOFF_BASE_SEC * 2 ** attempts, BACKOFF_MAX_SEC)
+    delay = min(BACKOFF_BASE_SEC * 2 ** min(attempts, 20), BACKOFF_MAX_SEC)
     _set(db, doc, {"status": "pending", "attempts": attempts, "lease_until": None,
                    "last_error": error, "next_attempt_at": _now() + timedelta(seconds=delay)})
 

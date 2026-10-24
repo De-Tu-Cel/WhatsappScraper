@@ -16,7 +16,7 @@ sys.path[:0] = [str(_API / "app"), str(_API)]
 from app.integrations.crm import config, mapping, outbox  # noqa: E402
 
 CHUNK = 500
-_COMPANY_FIELDS = {"status": 1, "source": 1, "location_mismatch": 1, "industry_mismatch": 1}
+_COMPANY_FIELDS = {"name": 1, "status": 1, "source": 1, "location_mismatch": 1, "industry_mismatch": 1}
 _CONTACT_FIELDS = {"company_id": 1, "type": 1, "value": 1}
 
 
@@ -28,9 +28,10 @@ def select_company_ids(db) -> list[str]:
     for i in range(0, len(companies), CHUNK):
         chunk = companies[i:i + CHUNK]
         by_company: dict[str, list[dict]] = {}
-        for contact in db.contacts.find(
-                {"company_id": {"$in": [str(c["_id"]) for c in chunk]}}, _CONTACT_FIELDS):
-            by_company.setdefault(contact["company_id"], []).append(contact)
+        ids = [str(c["_id"]) for c in chunk]
+        ids += [c["_id"] for c in chunk]  # company_id is stored as str or ObjectId
+        for contact in db.contacts.find({"company_id": {"$in": ids}}, _CONTACT_FIELDS):
+            by_company.setdefault(str(contact["company_id"]), []).append(contact)
         selected += [str(c["_id"]) for c in chunk
                      if mapping.is_eligible(c, by_company.get(str(c["_id"]), []))]
     return selected

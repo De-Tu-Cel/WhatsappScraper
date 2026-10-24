@@ -73,8 +73,8 @@ def test_claim_skips_future_next_attempt(db, env):
 def test_expired_lease_is_reclaimed(db, env):
     enqueue(db, "c1")
     assert claim_next(db, now=T0)["_id"] == "c1"
-    assert claim_next(db, now=T0 + timedelta(seconds=119)) is None
-    again = claim_next(db, now=T0 + timedelta(seconds=121))
+    assert claim_next(db, now=T0 + timedelta(seconds=299)) is None
+    again = claim_next(db, now=T0 + timedelta(seconds=301))
     assert again["_id"] == "c1"
 
 
@@ -139,7 +139,7 @@ def test_mark_after_reenqueue_is_ignored(db, env):
 def test_late_mark_from_expired_claim_is_ignored(db, env):
     enqueue(db, "c1")
     first = claim_next(db, now=T0)
-    second = claim_next(db, now=T0 + timedelta(seconds=121))
+    second = claim_next(db, now=T0 + timedelta(seconds=301))
     assert second["_id"] == "c1"
     mark_retry(db, first, "late")
     mark_done(db, first, "sent")
@@ -148,3 +148,20 @@ def test_late_mark_from_expired_claim_is_ignored(db, env):
     assert row.get("last_error") is None
     mark_done(db, second, "sent")
     assert db.crm_outbox.find_one({"_id": "c1"})["status"] == "sent"
+
+
+def test_unavailable_retries_never_reach_failed(db, env):
+    enqueue(db, "c1")
+    for _ in range(15):
+        mark_retry(db, claim_next(db, now=T0 + timedelta(days=1)), "down", give_up=False)
+    row = db.crm_outbox.find_one({"_id": "c1"})
+    assert row["status"] == "pending" and row["attempts"] == 15
+    assert _naive(row["next_attempt_at"]) == _naive(T0 + timedelta(seconds=3600))
+
+
+def test_unavailable_retry_keeps_claim_fencing(db, env):
+    enqueue(db, "c1")
+    first = claim_next(db, now=T0)
+    claim_next(db, now=T0 + timedelta(seconds=301))
+    mark_retry(db, first, "late", give_up=False)
+    assert db.crm_outbox.find_one({"_id": "c1"})["status"] == "sending"

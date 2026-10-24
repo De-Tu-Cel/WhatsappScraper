@@ -16,7 +16,7 @@ class CrmRejected(Exception):
 
 
 class CrmUnavailable(Exception):
-    """Transient/auth failure: network, timeout, 401, 403, 429, 5xx."""
+    """Transient/config failure: network, timeout, 3xx, 401, 403, 404, 405, 429, 5xx."""
 
 
 def _post(path: str, payload: dict) -> dict:
@@ -27,6 +27,7 @@ def _post(path: str, payload: dict) -> dict:
             json=payload,
             headers={"Authorization": f"Bearer {key}"},
             timeout=_TIMEOUT,
+            allow_redirects=False,
         )
     except requests.RequestException as exc:
         # Only the exception class: its text could echo request headers.
@@ -36,7 +37,8 @@ def _post(path: str, payload: dict) -> dict:
         return resp.json()
     body = (resp.text or "").replace(key, "***")[:_BODY_MAX]
     msg = f"{path}: HTTP {status} {body}"
-    if status in (401, 403, 429) or status >= 500:
+    # 3xx/404/405: wrong URL or http->https, a config error that needs fixing, not the payload.
+    if status in (401, 403, 404, 405, 429) or 300 <= status < 400 or status >= 500:
         raise CrmUnavailable(msg)
     raise CrmRejected(msg)
 
